@@ -1,0 +1,105 @@
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { GraduationCap, ArrowLeft, Sparkles, Brain, Users } from "lucide-react";
+import { toast } from "sonner";
+
+export const Route = createFileRoute("/login")({
+  head: () => ({ meta: [{ title: "Log in — ScholarSync" }, { name: "description", content: "Log in to your ScholarSync account." }] }),
+  component: LoginPage,
+});
+
+function LoginPage() {
+  const navigate = useNavigate();
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setTimeout(() => {
+      toast.success("Welcome back, Aisha!");
+      navigate({ to: "/dashboard" });
+    }, 600);
+  };
+
+  return (
+    <div className="grid min-h-screen lg:grid-cols-2">
+      {/* Left visual */}
+      <div className="relative hidden bg-gradient-hero lg:flex lg:flex-col lg:justify-between lg:p-12">
+        <Link to="/" className="flex items-center gap-2">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-primary shadow-glow">
+            <GraduationCap className="h-5 w-5 text-primary-foreground" />
+          </div>
+          <span className="font-display text-xl font-bold">ScholarSync</span>
+        </Link>
+
+        <div>
+          <h2 className="font-display text-4xl font-bold leading-tight">
+            Welcome back to<br />smarter group work.
+          </h2>
+          <p className="mt-4 max-w-md text-muted-foreground">
+            Pick up exactly where you left off. Your projects, tasks, and AI insights are waiting.
+          </p>
+
+          <div className="mt-10 grid gap-4">
+            {[
+              { icon: Sparkles, t: "AI tasks generated for every project" },
+              { icon: Brain, t: "Smart timeline with milestone alerts" },
+              { icon: Users, t: "Real-time team collaboration" },
+            ].map((f) => (
+              <div key={f.t} className="glass flex items-center gap-3 rounded-xl p-4">
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-primary">
+                  <f.icon className="h-4 w-4 text-primary-foreground" />
+                </div>
+                <span className="text-sm font-medium">{f.t}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="text-xs text-muted-foreground">© 2026 ScholarSync · Built for universities</div>
+      </div>
+
+      {/* Right form */}
+      <div className="flex flex-col p-6 lg:p-12">
+        <Link to="/" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
+          <ArrowLeft className="h-4 w-4" /> Back to home
+        </Link>
+
+        <div className="mx-auto flex w-full max-w-sm flex-1 flex-col justify-center">
+          <h1 className="font-display text-3xl font-bold">Log in</h1>
+          <p className="mt-2 text-sm text-muted-foreground">Enter your credentials to access your dashboard.</p>
+
+          <form onSubmit={handleSubmit} className="mt-8 space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="email">Email</Label>
+              <Input id="email" type="email" placeholder="aisha@uni.edu" required defaultValue="aisha@uni.edu" />
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="password">Password</Label>
+                <a href="#" className="text-xs text-primary hover:underline">Forgot?</a>
+              </div>
+              <Input id="password" type="password" placeholder="••••••••" required defaultValue="demopassword" />
+            </div>
+
+            <Button type="submit" disabled={loading} className="w-full bg-gradient-primary shadow-elegant">
+              {loading ? "Signing in..." : "Log in"}
+            </Button>
+          </form>
+
+          <p className="mt-6 text-center text-sm text-muted-foreground">
+            Don't have an account?{" "}
+            <Link to="/signup" className="font-medium text-primary hover:underline">Sign up</Link>
+          </p>
+
+          <div className="mt-6 rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+            <strong>Demo:</strong> Use any credentials — login is mocked. Or try role <Link to="/professor" className="text-primary hover:underline">/professor</Link>.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
