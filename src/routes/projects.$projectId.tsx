@@ -16,7 +16,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/projects/$projectId")({
-  head: ({ params }) => ({ meta: [{ title: `Project — ScholarSync` }] }),
+  head: () => ({ meta: [{ title: `Project — ScholarSync` }] }),
   component: ProjectDetail,
 });
 
@@ -28,9 +28,11 @@ function ProjectDetail() {
   const [tasks, setTasks] = useState<any[]>([]);
   const [submissions, setSubmissions] = useState<any[]>([]);
   const [joinRequests, setJoinRequests] = useState<any[]>([]);
-  const [milestones, setMilestones] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentUser, setCurrentUser] = useState<any>(null);
+  const [mySkills, setMySkills] = useState<string[]>([]);
+  const [skillsSaved, setSkillsSaved] = useState(false);
+  const [assigning, setAssigning] = useState(false);
 
   useEffect(() => {
     loadProject();
@@ -43,7 +45,7 @@ function ProjectDetail() {
     if (!user) return;
     setCurrentUser(user);
 
-    // Get project details
+    // Get full project data including AI results
     const { data: projectData } = await supabase
       .from("projects")
       .select("*")
@@ -60,6 +62,12 @@ function ProjectDetail() {
       .single();
     setMyMembership(membership);
 
+    // Load my existing skills if already selected
+    if (membership?.skills?.length > 0) {
+      setMySkills(membership.skills);
+      setSkillsSaved(true);
+    }
+
     // Get all accepted members with profiles
     const { data: membersData } = await supabase
       .from("project_members")
@@ -68,25 +76,23 @@ function ProjectDetail() {
       .eq("status", "accepted");
     setMembers(membersData || []);
 
+    // Get pending join requests with profiles
+    const { data: requestsData } = await supabase
+      .from("project_members")
+      .select("*, profiles(*)")
+      .eq("project_id", projectId)
+      .eq("status", "pending");
 
-   // Get pending join requests with profiles
-const { data: requestsData } = await supabase
-  .from("project_members")
-  .select("*, profiles(*)")
-  .eq("project_id", projectId)
-  .eq("status", "pending");
-
-// Manually fetch profiles if they didn't join
-const requestsWithProfiles = await Promise.all((requestsData || []).map(async (r) => {
-  if (r.profiles) return r;
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("*")
-    .eq("id", r.user_id)
-    .single();
-  return { ...r, profiles: profile };
-}));
-setJoinRequests(requestsWithProfiles);
+    const requestsWithProfiles = await Promise.all((requestsData || []).map(async (r) => {
+      if (r.profiles) return r;
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", r.user_id)
+        .single();
+      return { ...r, profiles: profile };
+    }));
+    setJoinRequests(requestsWithProfiles);
 
     // Get tasks
     const { data: tasksData } = await supabase
@@ -96,11 +102,16 @@ setJoinRequests(requestsWithProfiles);
     setTasks(tasksData || []);
 
     // Get submissions
-    const { data: subsData } = await supabase
-      .from("submissions")
-      .select("*, tasks(title), profiles(full_name)")
-      .in("task_id", (tasksData || []).map((t: any) => t.id));
-    setSubmissions(subsData || []);
+    const taskIds = (tasksData || []).map((t: any) => t.id);
+    if (taskIds.length > 0) {
+      const { data: subsData } = await supabase
+        .from("submissions")
+        .select("*, tasks(title), profiles(full_name)")
+        .in("task_id", taskIds);
+      setSubmissions(subsData || []);
+    } else {
+      setSubmissions([]);
+    }
 
     setLoading(false);
   };
@@ -110,7 +121,6 @@ setJoinRequests(requestsWithProfiles);
       .from("project_members")
       .update({ status: "accepted" })
       .eq("id", memberId);
-
     if (error) { toast.error("Failed to accept request"); return; }
     toast.success(`${userName} added to the team!`);
     loadProject();
@@ -121,7 +131,6 @@ setJoinRequests(requestsWithProfiles);
       .from("project_members")
       .update({ status: "rejected" })
       .eq("id", memberId);
-
     if (error) { toast.error("Failed to reject request"); return; }
     toast.success("Request rejected.");
     loadProject();
@@ -138,6 +147,79 @@ setJoinRequests(requestsWithProfiles);
     await supabase.from("submissions").update({ status: "needs_changes" }).eq("id", submissionId);
     toast.message("Feedback sent to member.");
     loadProject();
+  };
+
+  const handleSaveSkills = async () => {
+    if (mySkills.length === 0) {
+      toast.error("Please select at least one skill.");
+      return;
+    }
+    const { error } = await supabase
+      .from("project_members")
+      .update({ skills: mySkills })
+      .eq("project_id", projectId)
+      .eq("user_id", currentUser?.id);
+
+    if (error) { toast.error("Failed to save skills."); return; }
+    setSkillsSaved(true);
+    toast.success("Skills saved!");
+    loadProject();
+  };
+
+  const handleAssignTasks = async () => {
+    if (!project?.ai_tasks?.length) {
+      toast.error("No AI tasks found. Run AI analysis when creating the project first.");
+      return;
+    }
+    const membersWithSkills = members.filter((m) => m.skills?.length > 0);
+    if (membersWithSkills.length === 0) {
+      toast.error("No members have selected their skills yet.");
+      return;
+    }
+    setAssigning(true);
+
+    const memberData = membersWithSkills.map((m) => ({
+      name: m.profiles?.full_name || "Unknown",
+      skills: m.skills || [],
+      userId: m.user_id,
+    }));
+
+    try {
+      const { divideTasks } = await import("@/lib/gemini");
+      const result = await divideTasks(
+        memberData,
+        project.title,
+        project.type || [],
+        project.ai_tasks
+      );
+
+      // Delete old unassigned tasks first to avoid duplicates
+      await supabase.from("tasks").delete().eq("project_id", projectId);
+
+      // Save newly assigned tasks
+      const taskInserts = result.assignments.map((a: any) => {
+        const member = memberData.find((m) => m.name === a.assignedTo);
+        return {
+          project_id: projectId,
+          assigned_to: member?.userId || currentUser?.id,
+          title: a.task,
+          description: a.reason,
+          status: "pending",
+          priority: "medium",
+          deadline: project.deadline,
+        };
+      });
+
+      await supabase.from("tasks").insert(taskInserts);
+      await supabase.from("projects").update({ tasks_assigned: true }).eq("id", projectId);
+
+      toast.success("Tasks assigned to members based on their skills!");
+      loadProject();
+    } catch (err) {
+      toast.error("Failed to assign tasks. Please try again.");
+    }
+
+    setAssigning(false);
   };
 
   if (loading) {
@@ -199,6 +281,111 @@ setJoinRequests(requestsWithProfiles);
         </div>
       </div>
 
+      {/* Skills selection for members who haven't selected yet */}
+      {!isLeader && !skillsSaved && (
+        <Card className="mb-6 border-primary/30 bg-gradient-hero p-6">
+          <div className="flex items-center gap-2 mb-3">
+            <Sparkles className="h-4 w-4 text-primary" />
+            <h2 className="font-display font-semibold">Select Your Skills</h2>
+          </div>
+          <p className="text-sm text-muted-foreground mb-4">
+            Select the skills you bring to this project. The leader will use these to assign tasks to you.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {(project?.ai_skills?.length > 0 ? project.ai_skills : [
+              "Research", "Writing", "Design", "Coding", "Analysis",
+              "Presentation", "Testing", "Documentation"
+            ]).map((skill: string) => (
+              <button
+                key={skill}
+                type="button"
+                onClick={() => setMySkills((prev) =>
+                  prev.includes(skill) ? prev.filter((s) => s !== skill) : [...prev, skill]
+                )}
+                className={`rounded-full border px-3 py-1 text-xs font-medium transition-all ${
+                  mySkills.includes(skill)
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {mySkills.includes(skill) && "✓ "}{skill}
+              </button>
+            ))}
+          </div>
+          <Button className="mt-4 bg-gradient-primary" onClick={handleSaveSkills}>
+            Save My Skills
+          </Button>
+        </Card>
+      )}
+
+      {/* Skills saved confirmation */}
+      {!isLeader && skillsSaved && (
+        <Card className="mb-6 border-success/30 bg-success/5 p-4">
+          <div className="flex items-center gap-2 flex-wrap">
+            <CheckCircle2 className="h-4 w-4 text-success" />
+            <span className="text-sm font-medium">Skills saved</span>
+            <div className="flex flex-wrap gap-1 ml-2">
+              {mySkills.map((s) => (
+                <Badge key={s} variant="secondary" className="text-[10px]">{s}</Badge>
+              ))}
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="ml-auto text-xs"
+              onClick={() => setSkillsSaved(false)}
+            >
+              Edit
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {/* Assign tasks button for leader */}
+      {isLeader && !project?.tasks_assigned && members.length > 1 && (
+        <Card className="mb-6 border-primary/30 bg-gradient-hero p-6">
+          <div className="flex items-center gap-2 mb-2">
+            <Sparkles className="h-4 w-4 text-primary" />
+            <h2 className="font-display font-semibold">Ready to Assign Tasks?</h2>
+          </div>
+          <p className="text-sm text-muted-foreground mb-1">
+            Members with skills selected: {members.filter((m) => m.skills?.length > 0).length}/{members.length}
+          </p>
+          {members.filter((m) => m.role !== "leader" && (!m.skills || m.skills.length === 0)).length > 0 && (
+            <p className="text-xs text-warning-foreground mb-3">
+              ⚠️ Some members haven't selected their skills yet. You can still assign or wait for them.
+            </p>
+          )}
+          <Button
+            className="bg-gradient-primary"
+            onClick={handleAssignTasks}
+            disabled={assigning}
+          >
+            <Sparkles className="mr-2 h-4 w-4" />
+            {assigning ? "AI is assigning tasks..." : "Assign Tasks with AI"}
+          </Button>
+        </Card>
+      )}
+
+      {/* Tasks already assigned notice */}
+      {isLeader && project?.tasks_assigned && (
+        <Card className="mb-6 border-success/30 bg-success/5 p-4">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4 text-success" />
+            <span className="text-sm font-medium">Tasks have been assigned to all members</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="ml-auto text-xs"
+              onClick={handleAssignTasks}
+              disabled={assigning}
+            >
+              {assigning ? "Reassigning..." : "Reassign"}
+            </Button>
+          </div>
+        </Card>
+      )}
+
       {/* Stats */}
       <div className="grid gap-4 md:grid-cols-3">
         <Card className="p-5">
@@ -242,7 +429,12 @@ setJoinRequests(requestsWithProfiles);
         </TabsList>
 
         <TabsContent value="board" className="mt-4">
-          <KanbanBoard tasks={tasks} currentUserId={currentUser?.id} isLeader={isLeader} onUpdate={loadProject} />
+          <KanbanBoard
+            tasks={tasks}
+            currentUserId={currentUser?.id}
+            isLeader={isLeader}
+            onUpdate={loadProject}
+          />
         </TabsContent>
 
         <TabsContent value="timeline" className="mt-4">
@@ -252,27 +444,48 @@ setJoinRequests(requestsWithProfiles);
                 <Sparkles className="h-4 w-4 text-primary" />
                 <h2 className="font-display font-semibold">AI Generated Timeline</h2>
               </div>
-              {milestones.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No milestones yet. Run AI analysis when creating a project to generate a timeline.</p>
+              {!project?.ai_timeline?.length ? (
+                <p className="text-sm text-muted-foreground">No timeline yet. Run AI analysis when creating a project.</p>
               ) : (
                 <div className="space-y-3">
-                  {milestones.map((m: any, i: number) => (
-                    <div key={m.id} className="flex items-center gap-4">
-                      <div className={cn(
-                        "flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold",
-                        m.done ? "bg-success text-success-foreground" : "bg-muted text-muted-foreground border border-border"
-                      )}>
-                        {m.done ? <CheckCircle2 className="h-4 w-4" /> : i + 1}
+                  {project.ai_timeline.map((item: string, i: number) => (
+                    <div key={i} className="flex items-center gap-4">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/15 text-xs font-bold text-primary">
+                        {i + 1}
                       </div>
                       <div className="flex-1">
-                        <div className="text-sm font-medium">{m.title}</div>
-                        <div className="text-xs text-muted-foreground">{m.date}</div>
+                        <div className="text-sm font-medium">{item}</div>
                       </div>
                     </div>
                   ))}
                 </div>
               )}
+
+              {project?.ai_milestones?.length > 0 && (
+                <div className="mt-6">
+                  <h3 className="mb-3 font-display font-semibold text-sm">Milestones</h3>
+                  <div className="space-y-2">
+                    {project.ai_milestones.map((m: string, i: number) => (
+                      <div key={i} className="flex items-center gap-3">
+                        <div className={cn(
+                          "flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold",
+                          i < Math.ceil(overallProgress / (100 / project.ai_milestones.length))
+                            ? "bg-success text-success-foreground"
+                            : "bg-muted text-muted-foreground border border-border"
+                        )}>
+                          {i < Math.ceil(overallProgress / (100 / project.ai_milestones.length))
+                            ? <CheckCircle2 className="h-3 w-3" />
+                            : i + 1
+                          }
+                        </div>
+                        <span className="text-sm">{m}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </Card>
+
             <Card className="p-6">
               <div className="flex items-center gap-2">
                 <AlertCircle className="h-4 w-4 text-warning-foreground" />
@@ -288,7 +501,9 @@ setJoinRequests(requestsWithProfiles);
                     </div>
                   </div>
                 ))}
-                {tasks.length === 0 && <p className="text-sm text-muted-foreground">No tasks yet.</p>}
+                {tasks.length === 0 && (
+                  <p className="text-sm text-muted-foreground">No tasks yet.</p>
+                )}
               </div>
             </Card>
           </div>
@@ -328,7 +543,12 @@ setJoinRequests(requestsWithProfiles);
                         </div>
                         <div className="text-xs text-muted-foreground">{m.profiles?.email}</div>
                         <div className="mt-1 flex flex-wrap gap-1">
-                          {(m.skills || []).map((s: string) => <Badge key={s} variant="outline" className="text-[10px]">{s}</Badge>)}
+                          {(m.skills || []).length > 0
+                            ? (m.skills || []).map((s: string) => (
+                                <Badge key={s} variant="outline" className="text-[10px]">{s}</Badge>
+                              ))
+                            : <span className="text-xs text-muted-foreground">No skills selected yet</span>
+                          }
                         </div>
                       </div>
                       <div className="w-48">
@@ -368,8 +588,11 @@ setJoinRequests(requestsWithProfiles);
                         <Button size="sm" variant="outline" onClick={() => handleRejectRequest(r.id)}>
                           <X className="mr-1 h-3 w-3" /> Reject
                         </Button>
-                        <Button size="sm" className="bg-success text-success-foreground hover:bg-success/90"
-                          onClick={() => handleAcceptRequest(r.id, r.profiles?.full_name)}>
+                        <Button
+                          size="sm"
+                          className="bg-success text-success-foreground hover:bg-success/90"
+                          onClick={() => handleAcceptRequest(r.id, r.profiles?.full_name)}
+                        >
                           <CheckCircle2 className="mr-1 h-3 w-3" /> Accept
                         </Button>
                       </div>
@@ -417,14 +640,15 @@ function KanbanBoard({ tasks, currentUserId, isLeader, onUpdate }: {
                   </div>
                   <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
                     <span>{t.profiles?.full_name?.split(" ")[0] || "Unassigned"}</span>
-                    <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{t.deadline?.slice(5) || "No date"}</span>
+                    <span className="flex items-center gap-1">
+                      <Clock className="h-3 w-3" />{t.deadline?.slice(5) || "No date"}
+                    </span>
                   </div>
                   {t.progress > 0 && (
                     <div className="mt-2 h-1 rounded-full bg-muted overflow-hidden">
                       <div className="h-full bg-gradient-primary" style={{ width: `${t.progress}%` }} />
                     </div>
                   )}
-                  {/* Allow member to move their own task, leader can move any */}
                   {(isLeader || t.assigned_to === currentUserId) && col !== "approved" && (
                     <div className="mt-2 flex gap-1">
                       {col === "pending" && (
@@ -450,7 +674,9 @@ function KanbanBoard({ tasks, currentUserId, isLeader, onUpdate }: {
                 </Card>
               ))}
               {colTasks.length === 0 && (
-                <div className="rounded-lg border-2 border-dashed border-border/40 p-4 text-center text-xs text-muted-foreground">Empty</div>
+                <div className="rounded-lg border-2 border-dashed border-border/40 p-4 text-center text-xs text-muted-foreground">
+                  Empty
+                </div>
               )}
             </div>
           </div>
@@ -466,7 +692,6 @@ function SubmissionsPanel({ tasks, submissions, isLeader, currentUserId, onAppro
   onReject: (id: string) => void; onSubmitted: () => void;
 }) {
   const [fileName, setFileName] = useState<string | null>(null);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [selectedTask, setSelectedTask] = useState<string>("");
   const [uploading, setUploading] = useState(false);
 
@@ -558,10 +783,7 @@ function SubmissionsPanel({ tasks, submissions, isLeader, currentUserId, onAppro
           <input
             type="file"
             className="hidden"
-            onChange={(e) => {
-              setSelectedFile(e.target.files?.[0] || null);
-              setFileName(e.target.files?.[0]?.name ?? null);
-            }}
+            onChange={(e) => setFileName(e.target.files?.[0]?.name ?? null)}
           />
         </label>
         <Button className="mt-4 w-full bg-gradient-primary" onClick={handleSubmit} disabled={uploading}>

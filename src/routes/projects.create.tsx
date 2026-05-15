@@ -109,18 +109,18 @@ function CreateProject() {
       return;
     }
 
-    if (aiResult?.tasks) {
-      const taskInserts = aiResult.tasks.map((taskTitle: string) => ({
-        project_id: project.id,
-        assigned_to: user.id,
-        title: taskTitle,
-        status: "pending",
-        priority: "medium",
-        deadline,
-      }));
-      await supabase.from("tasks").insert(taskInserts);
-    }
-
+   // Save AI results to project but don't assign tasks yet
+  if (aiResult) {
+    await supabase
+      .from("projects")
+      .update({
+        ai_tasks: aiResult.tasks || [],
+        ai_timeline: aiResult.timeline || [],
+        ai_milestones: aiResult.milestones || [],
+        ai_skills: aiResult.skills || [],
+      })
+      .eq("id", project.id);
+      }
     toast.success("Project created — you're now the leader!");
     navigate({ to: "/projects" });
     setLoading(false);
