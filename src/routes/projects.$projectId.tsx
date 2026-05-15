@@ -254,11 +254,22 @@ function ProjectDetail() {
       toast.error("No AI tasks found. Run AI analysis when creating the project first.");
       return;
     }
+
     const membersWithSkills = members.filter((m) => m.skills?.length > 0);
+    const membersWithoutSkills = members.filter((m) => m.role !== "leader" && (!m.skills || m.skills.length === 0));
+
     if (membersWithSkills.length === 0) {
       toast.error("No members have selected their skills yet.");
       return;
     }
+
+    if (membersWithoutSkills.length > 0) {
+      toast.error(
+        `${membersWithoutSkills.length} member${membersWithoutSkills.length === 1 ? "" : "s"} haven't selected skills yet. Wait for them before assigning tasks.`
+      );
+      return;
+    }
+
     setAssigning(true);
 
     const memberData = membersWithSkills.map((m) => ({
@@ -328,6 +339,7 @@ function ProjectDetail() {
 
   const isLeader = myMembership?.role === "leader";
   const leaderUserId = project?.leader_id ?? members.find((m) => m.role === "leader")?.user_id;
+  const membersWithoutSkills = members.filter((m) => m.role !== "leader" && (!m.skills || m.skills.length === 0));
   const currentMemberName =
     members.find((m) => m.user_id === currentUser?.id)?.profiles?.full_name || "A team member";
   const myTasks = tasks.filter((t) => t.assigned_to === currentUser?.id);
@@ -437,15 +449,15 @@ function ProjectDetail() {
           <p className="text-sm text-muted-foreground mb-1">
             Members with skills selected: {members.filter((m) => m.skills?.length > 0).length}/{members.length}
           </p>
-          {members.filter((m) => m.role !== "leader" && (!m.skills || m.skills.length === 0)).length > 0 && (
+          {membersWithoutSkills.length > 0 && (
             <p className="text-xs text-warning-foreground mb-3">
-              ⚠️ Some members haven't selected their skills yet. You can still assign or wait for them.
+              ⚠️ {membersWithoutSkills.length} member{membersWithoutSkills.length === 1 ? "" : "s"} haven't selected their skills yet. You can still assign or wait for them.
             </p>
           )}
           <Button
             className="bg-gradient-primary"
             onClick={handleAssignTasks}
-            disabled={assigning}
+            disabled={assigning || membersWithoutSkills.length > 0}
           >
             <Sparkles className="mr-2 h-4 w-4" />
             {assigning ? "AI is assigning tasks..." : "Assign Tasks with AI"}

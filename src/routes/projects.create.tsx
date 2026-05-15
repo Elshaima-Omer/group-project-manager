@@ -9,7 +9,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Upload, Sparkles, CheckCircle2, FileText, Clock, Users, Brain } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { analyzeProject } from "@/lib/gemini";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { lookupClassroomByJoinCode } from "@/lib/classrooms";
@@ -36,6 +35,7 @@ function CreateProject() {
   const [skills, setSkills] = useState<string[]>([]);
   const [analyzed, setAnalyzed] = useState(false);
   const [aiResult, setAiResult] = useState<any>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -56,15 +56,41 @@ function CreateProject() {
     setSkills((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]));
 
   const handleAnalyze = async () => {
-    if (!fileName) { toast.error("Upload a project description first."); return; }
+    if (!selectedFile && !description) { toast.error("Upload a project description file or enter a description first."); return; }
     if (types.length === 0) { toast.error("Select at least one project type first."); return; }
     setAnalyzing(true);
 
-    const result = await analyzeProject(title, types, description);
-    setAiResult(result);
-    setAnalyzed(true);
-    toast.success("AI analysis complete!");
-    setAnalyzing(false);
+    try {
+      const formData = new FormData();
+      if (selectedFile) {
+        formData.append("file", selectedFile);
+        formData.append("fileName", selectedFile.name);
+      }
+      formData.append("title", title);
+      formData.append("description", description);
+      formData.append("deadline", deadline);
+      formData.append("types", JSON.stringify(types));
+
+      const response = await fetch("/api/ai-analyze", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        throw new Error(errorData?.error || "AI analysis failed");
+      }
+
+      const result = await response.json();
+      setAiResult(result);
+      setAnalyzed(true);
+      toast.success("AI analysis complete!");
+    } catch (error: any) {
+      console.error("AI analysis request failed:", error);
+      toast.error(error?.message || "AI analysis request failed.");
+    } finally {
+      setAnalyzing(false);
+    }
   };
 
   const handleVerifyClassroom = async () => {
@@ -291,9 +317,13 @@ function CreateProject() {
               <span className="mt-1 text-xs text-muted-foreground">PDF, DOCX, PNG, JPG up to 20MB</span>
               <input
                 type="file"
-                accept=".pdf,.docx,.png,.jpg,.jpeg"
+                accept=".pdf,.docx,.txt,.png,.jpg,.jpeg"
                 className="hidden"
-                onChange={(e) => setFileName(e.target.files?.[0]?.name ?? null)}
+                onChange={(e) => {
+                  const file = e.target.files?.[0] ?? null;
+                  setSelectedFile(file);
+                  setFileName(file?.name ?? null);
+                }}
               />
             </label>
             <Button type="button" onClick={handleAnalyze} variant="outline" className="mt-4 w-full" disabled={analyzing}>

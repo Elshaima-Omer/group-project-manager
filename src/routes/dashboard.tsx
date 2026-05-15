@@ -62,15 +62,15 @@ function Dashboard() {
       .from("tasks")
       .select("*")
       .eq("assigned_to", user.id)
-      .order("deadline", { ascending: true })
-      .limit(4);
+      .order("deadline", { ascending: true });
     setTasks(taskData || []);
 
-    // Get notifications for this user
+    // Get unread notifications for this user
     const { data: notifData } = await supabase
       .from("notifications")
       .select("*")
       .eq("user_id", user.id)
+      .eq("read", false)
       .order("created_at", { ascending: false })
       .limit(5);
     setNotifications(notifData || []);
@@ -78,10 +78,16 @@ function Dashboard() {
     setLoading(false);
   };
 
-  const activeProjects = projects.filter((p) => p.projects?.status === "active").length;
+  const activeProjects = projects.filter((p) => {
+    const status = String(p.projects?.status || "").toLowerCase();
+    return status !== "completed" && status !== "done";
+  }).length;
+
   const personalProgress = tasks.length > 0
     ? Math.round(tasks.reduce((s, t) => s + (t.progress || 0), 0) / tasks.length)
     : 0;
+
+  const recentTasks = tasks.slice(0, 4);
 
   if (loading) {
     return (
@@ -143,7 +149,7 @@ function Dashboard() {
             {tasks.length === 0 && (
               <p className="text-sm text-muted-foreground">No tasks assigned yet. Join or create a project to get started.</p>
             )}
-            {tasks.map((t) => (
+            {recentTasks.map((t) => (
               <div key={t.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-border/60 p-3">
                 <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
                 <div className="min-w-0 flex-1">
