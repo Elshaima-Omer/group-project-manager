@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/lib/supabase";
+import { notifyUser } from "@/lib/notifications";
 import { Plus, LogIn, Search, Calendar, Crown, User, Copy, Check } from "lucide-react";
 import { useState, useEffect } from "react";
 import {
@@ -224,10 +225,10 @@ function JoinProjectDialog({ onJoined }: { onJoined: () => void }) {
       .single();
 
     if (leader) {
-      await supabase.from("notifications").insert({
-        user_id: leader.user_id,
-        message: `A new student wants to join your project "${project.title}".`,
+      await notifyUser({
+        userId: leader.user_id,
         type: "join_request",
+        message: `A new student wants to join your project "${project.title}".`,
       });
     }
 

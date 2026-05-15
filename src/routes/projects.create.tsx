@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { analyzeProject } from "@/lib/gemini";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
+import { lookupClassroomByJoinCode } from "@/lib/classrooms";
 
 export const Route = createFileRoute("/projects/create")({
   head: () => ({ meta: [{ title: "New Project — ScholarSync" }] }),
@@ -40,8 +41,11 @@ function CreateProject() {
   const [description, setDescription] = useState("");
   const [deadline, setDeadline] = useState("");
   const [password, setPassword] = useState("");
+  const [classroomCode, setClassroomCode] = useState("");
+  const [verifiedClassroom, setVerifiedClassroom] = useState<{ id: string; name: string; professorName?: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
+  const [verifyingCode, setVerifyingCode] = useState(false);
 
   const availableSkills = Array.from(new Set(types.flatMap((t) => skillsByType[t] || [])));
 
@@ -63,10 +67,31 @@ function CreateProject() {
     setAnalyzing(false);
   };
 
+  const handleVerifyClassroom = async () => {
+    setVerifyingCode(true);
+    setVerifiedClassroom(null);
+    const { classroom, error } = await lookupClassroomByJoinCode(classroomCode);
+    setVerifyingCode(false);
+    if (error || !classroom) {
+      toast.error(error ?? "Classroom not found.");
+      return;
+    }
+    setVerifiedClassroom({
+      id: classroom.id,
+      name: classroom.name,
+      professorName: classroom.profiles?.full_name ?? undefined,
+    });
+    toast.success(`Linked to ${classroom.name}`);
+  };
+
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title || !deadline || !password) {
       toast.error("Please fill in all required fields.");
+      return;
+    }
+    if (!verifiedClassroom) {
+      toast.error("Enter your professor's classroom code and click Verify first.");
       return;
     }
     setLoading(true);
@@ -83,6 +108,7 @@ function CreateProject() {
         password,
         deadline,
         leader_id: user.id,
+        classroom_id: verifiedClassroom.id,
       })
       .select()
       .single();
@@ -142,6 +168,34 @@ function CreateProject() {
           <Card className="p-6">
             <h2 className="mb-4 font-display text-lg font-semibold">Project Details</h2>
             <div className="space-y-4">
+              <div className="space-y-2 rounded-lg border border-primary/30 bg-primary/5 p-4">
+                <Label htmlFor="classroom">Professor&apos;s classroom code *</Label>
+                <p className="text-xs text-muted-foreground">
+                  Ask your professor for the 6-letter code from their Classrooms page.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Input
+                    id="classroom"
+                    placeholder="e.g. K7M2XP"
+                    value={classroomCode}
+                    onChange={(e) => {
+                      setClassroomCode(e.target.value.toUpperCase());
+                      setVerifiedClassroom(null);
+                    }}
+                    className="max-w-xs font-mono uppercase"
+                    required
+                  />
+                  <Button type="button" variant="outline" onClick={handleVerifyClassroom} disabled={verifyingCode}>
+                    {verifyingCode ? "Checking..." : "Verify code"}
+                  </Button>
+                </div>
+                {verifiedClassroom && (
+                  <p className="text-sm text-success">
+                    ✓ {verifiedClassroom.name}
+                    {verifiedClassroom.professorName ? ` · ${verifiedClassroom.professorName}` : ""}
+                  </p>
+                )}
+              </div>
               <div className="space-y-2">
                 <Label htmlFor="title">Project title</Label>
                 <Input

@@ -17,6 +17,7 @@ import { Route as ProjectsIndexRouteImport } from './routes/projects.index'
 import { Route as ProfessorIndexRouteImport } from './routes/professor.index'
 import { Route as ProjectsCreateRouteImport } from './routes/projects.create'
 import { Route as ProjectsProjectIdRouteImport } from './routes/projects.$projectId'
+import { Route as ProfessorClassroomsRouteImport } from './routes/professor.classrooms'
 import { Route as ProfessorProjectIdRouteImport } from './routes/professor.$projectId'
 
 const SignupRoute = SignupRouteImport.update({
@@ -59,6 +60,11 @@ const ProjectsProjectIdRoute = ProjectsProjectIdRouteImport.update({
   path: '/projects/$projectId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ProfessorClassroomsRoute = ProfessorClassroomsRouteImport.update({
+  id: '/professor/classrooms',
+  path: '/professor/classrooms',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ProfessorProjectIdRoute = ProfessorProjectIdRouteImport.update({
   id: '/professor/$projectId',
   path: '/professor/$projectId',
@@ -71,6 +77,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
   '/professor/$projectId': typeof ProfessorProjectIdRoute
+  '/professor/classrooms': typeof ProfessorClassroomsRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/professor/': typeof ProfessorIndexRoute
@@ -82,6 +89,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
   '/professor/$projectId': typeof ProfessorProjectIdRoute
+  '/professor/classrooms': typeof ProfessorClassroomsRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/professor': typeof ProfessorIndexRoute
@@ -94,6 +102,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
   '/professor/$projectId': typeof ProfessorProjectIdRoute
+  '/professor/classrooms': typeof ProfessorClassroomsRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/professor/': typeof ProfessorIndexRoute
@@ -107,6 +116,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/signup'
     | '/professor/$projectId'
+    | '/professor/classrooms'
     | '/projects/$projectId'
     | '/projects/create'
     | '/professor/'
@@ -118,6 +128,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/signup'
     | '/professor/$projectId'
+    | '/professor/classrooms'
     | '/projects/$projectId'
     | '/projects/create'
     | '/professor'
@@ -129,6 +140,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/signup'
     | '/professor/$projectId'
+    | '/professor/classrooms'
     | '/projects/$projectId'
     | '/projects/create'
     | '/professor/'
@@ -141,6 +153,7 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   SignupRoute: typeof SignupRoute
   ProfessorProjectIdRoute: typeof ProfessorProjectIdRoute
+  ProfessorClassroomsRoute: typeof ProfessorClassroomsRoute
   ProjectsProjectIdRoute: typeof ProjectsProjectIdRoute
   ProjectsCreateRoute: typeof ProjectsCreateRoute
   ProfessorIndexRoute: typeof ProfessorIndexRoute
@@ -205,6 +218,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsProjectIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/professor/classrooms': {
+      id: '/professor/classrooms'
+      path: '/professor/classrooms'
+      fullPath: '/professor/classrooms'
+      preLoaderRoute: typeof ProfessorClassroomsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/professor/$projectId': {
       id: '/professor/$projectId'
       path: '/professor/$projectId'
@@ -221,6 +241,7 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   SignupRoute: SignupRoute,
   ProfessorProjectIdRoute: ProfessorProjectIdRoute,
+  ProfessorClassroomsRoute: ProfessorClassroomsRoute,
   ProjectsProjectIdRoute: ProjectsProjectIdRoute,
   ProjectsCreateRoute: ProjectsCreateRoute,
   ProfessorIndexRoute: ProfessorIndexRoute,

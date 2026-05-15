@@ -1,5 +1,5 @@
 import { Link, useLocation, useRouter } from "@tanstack/react-router";
-import { LayoutDashboard, FolderKanban, GraduationCap, Bell, LogOut, Sparkles, Menu, X } from "lucide-react";
+import { LayoutDashboard, FolderKanban, GraduationCap, Bell, LogOut, Sparkles, Menu, X, BookOpen } from "lucide-react";
 import { useState, useEffect, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "./theme-toggle";
@@ -29,6 +29,7 @@ const studentNav: NavItem[] = [
 
 const professorNav: NavItem[] = [
   { to: "/professor", label: "Dashboard", icon: LayoutDashboard },
+  { to: "/professor/classrooms", label: "Classrooms", icon: BookOpen },
 ];
 
 export function AppShell({ children, role = "student" }: { children: ReactNode; role?: "student" | "professor" }) {

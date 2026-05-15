@@ -39,84 +39,57 @@ function ProfessorDashboard() {
       .single();
     setProfile(profileData);
 
-    // Get all projects linked to this professor
-    const { data: linkedProjects } = await supabase
-      .from("professor_projects")
-      .select("*, projects(*)")
+    // Projects in classrooms owned by this professor
+    const { data: myClassrooms } = await supabase
+      .from("classrooms")
+      .select("id, name")
       .eq("professor_id", user.id);
 
-    if (!linkedProjects || linkedProjects.length === 0) {
-      // If no linked projects yet, show all projects for demo purposes
-      const { data: allProjects } = await supabase
-        .from("projects")
-        .select("*")
-        .order("created_at", { ascending: false });
+    const classroomIds = (myClassrooms || []).map((c) => c.id);
 
-      // For each project, get members and tasks
-      const enriched = await Promise.all((allProjects || []).map(async (p) => {
-        const { data: members } = await supabase
-          .from("project_members")
-          .select("*, profiles(*)")
-          .eq("project_id", p.id)
-          .eq("status", "accepted");
-
-        const { data: tasks } = await supabase
-          .from("tasks")
-          .select("*")
-          .eq("project_id", p.id);
-
-        const leader = (members || []).find((m) => m.role === "leader");
-        const overallProgress = tasks && tasks.length > 0
-          ? Math.round(tasks.reduce((s: number, t: any) => s + (t.progress || 0), 0) / tasks.length)
-          : 0;
-        const approvedTasks = (tasks || []).filter((t) => t.status === "approved").length;
-        const pendingTasks = (tasks || []).filter((t) => t.status !== "approved").length;
-
-        return {
-          ...p,
-          members: members || [],
-          leader: leader?.profiles?.full_name || "Unknown",
-          tasks: tasks || [],
-          overallProgress,
-          approvedTasks,
-          pendingTasks,
-        };
-      }));
-
-      setProjects(enriched);
-    } else {
-      const enriched = await Promise.all(linkedProjects.map(async (lp) => {
-        const p = lp.projects;
-
-        const { data: members } = await supabase
-          .from("project_members")
-          .select("*, profiles(*)")
-          .eq("project_id", p.id)
-          .eq("status", "accepted");
-
-        const { data: tasks } = await supabase
-          .from("tasks")
-          .select("*")
-          .eq("project_id", p.id);
-
-        const leader = (members || []).find((m) => m.role === "leader");
-        const overallProgress = tasks && tasks.length > 0
-          ? Math.round(tasks.reduce((s: number, t: any) => s + (t.progress || 0), 0) / tasks.length)
-          : 0;
-
-        return {
-          ...p,
-          members: members || [],
-          leader: leader?.profiles?.full_name || "Unknown",
-          tasks: tasks || [],
-          overallProgress,
-          approvedTasks: (tasks || []).filter((t) => t.status === "approved").length,
-          pendingTasks: (tasks || []).filter((t) => t.status !== "approved").length,
-        };
-      }));
-
-      setProjects(enriched);
+    if (classroomIds.length === 0) {
+      setProjects([]);
+      setLoading(false);
+      return;
     }
+
+    const { data: classroomProjects } = await supabase
+      .from("projects")
+      .select("*, classrooms(name)")
+      .in("classroom_id", classroomIds)
+      .order("created_at", { ascending: false });
+
+    const enriched = await Promise.all((classroomProjects || []).map(async (p) => {
+      const { data: members } = await supabase
+        .from("project_members")
+        .select("*, profiles(*)")
+        .eq("project_id", p.id)
+        .eq("status", "accepted");
+
+      const { data: tasks } = await supabase
+        .from("tasks")
+        .select("*")
+        .eq("project_id", p.id);
+
+      const leader = (members || []).find((m) => m.role === "leader");
+      const overallProgress =
+        tasks && tasks.length > 0
+          ? Math.round(tasks.reduce((s: number, t: any) => s + (t.progress || 0), 0) / tasks.length)
+          : 0;
+
+      return {
+        ...p,
+        classroomName: p.classrooms?.name || "—",
+        members: members || [],
+        leader: leader?.profiles?.full_name || "Unknown",
+        tasks: tasks || [],
+        overallProgress,
+        approvedTasks: (tasks || []).filter((t) => t.status === "approved").length,
+        pendingTasks: (tasks || []).filter((t) => t.status !== "approved").length,
+      };
+    }));
+
+    setProjects(enriched);
 
     setLoading(false);
   };
@@ -142,8 +115,11 @@ function ProfessorDashboard() {
           Welcome, Prof. {profile?.full_name?.split(" ").slice(-1)[0] || "Professor"} 👋
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Overview of all supervised student projects.
+          Student projects linked to your classrooms. Create a classroom and share its code with students.
         </p>
+        <Link to="/professor/classrooms" className="mt-2 inline-block text-sm font-medium text-primary hover:underline">
+          Manage classrooms →
+        </Link>
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">
@@ -157,7 +133,7 @@ function ProfessorDashboard() {
         <h2 className="mb-4 font-display text-lg font-semibold">All Groups</h2>
         {projects.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            No projects found. Projects created by students will appear here.
+            No projects yet. Create a classroom, share the code with students, and they will link projects when creating a group.
           </p>
         ) : (
           <div className="overflow-x-auto">
@@ -165,6 +141,7 @@ function ProfessorDashboard() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Project</TableHead>
+                  <TableHead>Classroom</TableHead>
                   <TableHead>Leader</TableHead>
                   <TableHead>Members</TableHead>
                   <TableHead>Progress</TableHead>
@@ -181,6 +158,9 @@ function ProfessorDashboard() {
                       <div className="text-xs text-muted-foreground">
                         {p.id?.slice(0, 8).toUpperCase()} · {(p.type || []).join(", ")}
                       </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="text-sm">{p.classroomName}</div>
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1.5 text-sm">

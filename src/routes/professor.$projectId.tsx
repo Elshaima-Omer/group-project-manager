@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ export const Route = createFileRoute("/professor/$projectId")({
 });
 
 function FinalReport() {
+  const navigate = useNavigate();
   const { projectId } = Route.useParams();
   const [project, setProject] = useState<any>(null);
   const [members, setMembers] = useState<any[]>([]);
@@ -33,11 +34,32 @@ function FinalReport() {
   const loadReport = async () => {
     setLoading(true);
 
-    const { data: projectData } = await supabase
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      setLoading(false);
+      return;
+    }
+
+    const { data: projectData, error: projectError } = await supabase
       .from("projects")
-      .select("*")
+      .select("*, classrooms!inner(id, name, professor_id)")
       .eq("id", projectId)
       .single();
+
+    if (projectError || !projectData) {
+      toast.error("Project not found.");
+      navigate({ to: "/professor" });
+      setLoading(false);
+      return;
+    }
+
+    if (projectData.classrooms?.professor_id !== user.id) {
+      toast.error("You do not have access to this project.");
+      navigate({ to: "/professor" });
+      setLoading(false);
+      return;
+    }
+
     setProject(projectData);
 
     const { data: membersData } = await supabase

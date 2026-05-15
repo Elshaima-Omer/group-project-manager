@@ -9,11 +9,18 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { supabase } from "@/lib/supabase";
 import {
   ArrowLeft, Crown, User, Calendar, Upload, CheckCircle2, X, Sparkles, Clock,
-  AlertCircle, FileText, MessageSquare,
+  AlertCircle, FileText, MessageSquare, Download, ExternalLink,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { notifyUser, getSubmissionSubmitterId } from "@/lib/notifications";
+import {
+  uploadSubmissionFile,
+  getSubmissionDownloadUrl,
+  displayFileName,
+  isStoragePath,
+} from "@/lib/submission-storage";
 
 export const Route = createFileRoute("/projects/$projectId")({
   head: () => ({ meta: [{ title: `Project — ScholarSync` }] }),
@@ -106,7 +113,7 @@ function ProjectDetail() {
     if (taskIds.length > 0) {
       const { data: subsData } = await supabase
         .from("submissions")
-        .select("*, tasks(title), profiles(full_name)")
+        .select("*, tasks(title), profiles(id, full_name)")
         .in("task_id", taskIds);
       setSubmissions(subsData || []);
     } else {
@@ -116,35 +123,111 @@ function ProjectDetail() {
     setLoading(false);
   };
 
-  const handleAcceptRequest = async (memberId: string, userName: string) => {
+  const handleAcceptRequest = async (memberId: string, userName: string, userId: string) => {
     const { error } = await supabase
       .from("project_members")
       .update({ status: "accepted" })
       .eq("id", memberId);
     if (error) { toast.error("Failed to accept request"); return; }
+
+    await notifyUser({
+      userId,
+      type: "join_accepted",
+      message: `You were accepted into "${project?.title || "the project"}".`,
+    });
+
     toast.success(`${userName} added to the team!`);
     loadProject();
   };
 
-  const handleRejectRequest = async (memberId: string) => {
+  const handleRejectRequest = async (memberId: string, userName: string, userId: string) => {
     const { error } = await supabase
       .from("project_members")
       .update({ status: "rejected" })
       .eq("id", memberId);
     if (error) { toast.error("Failed to reject request"); return; }
+
+    await notifyUser({
+      userId,
+      type: "join_rejected",
+      message: `Your request to join "${project?.title || "the project"}" was not accepted.`,
+    });
+
     toast.success("Request rejected.");
     loadProject();
   };
 
-  const handleApproveSubmission = async (submissionId: string, taskId: string) => {
+  const resolveSubmitterUserId = async (
+    submissionId: string,
+    taskId: string,
+    submitterUserId?: string,
+  ): Promise<string | undefined> => {
+    if (submitterUserId) return submitterUserId;
+
+    const fromState = submissions.find((s) => s.id === submissionId);
+    const fromStateId = fromState ? getSubmissionSubmitterId(fromState) : undefined;
+    if (fromStateId) return fromStateId;
+
+    const { data: row } = await supabase
+      .from("submissions")
+      .select("submitted_by, user_id")
+      .eq("id", submissionId)
+      .single();
+
+    if (row) {
+      const id = row.submitted_by ?? row.user_id;
+      if (id) return id;
+    }
+
+    const task = tasks.find((t) => t.id === taskId);
+    return task?.assigned_to ?? undefined;
+  };
+
+  const handleApproveSubmission = async (
+    submissionId: string,
+    taskId: string,
+    submitterUserId?: string,
+  ) => {
+    const task = tasks.find((t) => t.id === taskId);
+    const memberId = await resolveSubmitterUserId(submissionId, taskId, submitterUserId);
+
     await supabase.from("submissions").update({ status: "accepted" }).eq("id", submissionId);
     await supabase.from("tasks").update({ status: "approved", progress: 100 }).eq("id", taskId);
+
+    if (memberId) {
+      await notifyUser({
+        userId: memberId,
+        type: "submission_approved",
+        message: `Your work on "${task?.title || "a task"}" in "${project?.title || "the project"}" was approved.`,
+      });
+    } else {
+      toast.error("Work approved, but the student could not be notified (submitter unknown).");
+    }
+
     toast.success("Submission approved!");
     loadProject();
   };
 
-  const handleRejectSubmission = async (submissionId: string) => {
+  const handleRejectSubmission = async (submissionId: string, submitterUserId?: string) => {
+    const submission = submissions.find((s) => s.id === submissionId);
+    const taskId = submission?.task_id as string | undefined;
+    const taskTitle = submission?.tasks?.title || tasks.find((t) => t.id === taskId)?.title;
+    const memberId = taskId
+      ? await resolveSubmitterUserId(submissionId, taskId, submitterUserId)
+      : submitterUserId;
+
     await supabase.from("submissions").update({ status: "needs_changes" }).eq("id", submissionId);
+
+    if (memberId) {
+      await notifyUser({
+        userId: memberId,
+        type: "submission_rejected",
+        message: `Your submission for "${taskTitle || "a task"}" in "${project?.title || "the project"}" needs changes. Please revise and resubmit.`,
+      });
+    } else {
+      toast.error("Feedback saved, but the student could not be notified (submitter unknown).");
+    }
+
     toast.message("Feedback sent to member.");
     loadProject();
   };
@@ -244,6 +327,9 @@ function ProjectDetail() {
   }
 
   const isLeader = myMembership?.role === "leader";
+  const leaderUserId = project?.leader_id ?? members.find((m) => m.role === "leader")?.user_id;
+  const currentMemberName =
+    members.find((m) => m.user_id === currentUser?.id)?.profiles?.full_name || "A team member";
   const myTasks = tasks.filter((t) => t.assigned_to === currentUser?.id);
   const myProgress = myTasks.length > 0
     ? Math.round(myTasks.reduce((s: number, t: any) => s + (t.progress || 0), 0) / myTasks.length)
@@ -511,10 +597,14 @@ function ProjectDetail() {
 
         <TabsContent value="submissions" className="mt-4">
           <SubmissionsPanel
+            projectId={projectId}
             tasks={isLeader ? tasks : myTasks}
             submissions={submissions}
             isLeader={isLeader}
             currentUserId={currentUser?.id}
+            leaderUserId={leaderUserId}
+            projectTitle={project?.title || "Project"}
+            memberName={currentMemberName}
             onApprove={handleApproveSubmission}
             onReject={handleRejectSubmission}
             onSubmitted={loadProject}
@@ -585,13 +675,17 @@ function ProjectDetail() {
                         <div className="text-xs text-muted-foreground">{r.profiles?.email}</div>
                       </div>
                       <div className="flex gap-2">
-                        <Button size="sm" variant="outline" onClick={() => handleRejectRequest(r.id)}>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleRejectRequest(r.id, r.profiles?.full_name || "Student", r.user_id)}
+                        >
                           <X className="mr-1 h-3 w-3" /> Reject
                         </Button>
                         <Button
                           size="sm"
                           className="bg-success text-success-foreground hover:bg-success/90"
-                          onClick={() => handleAcceptRequest(r.id, r.profiles?.full_name)}
+                          onClick={() => handleAcceptRequest(r.id, r.profiles?.full_name || "Student", r.user_id)}
                         >
                           <CheckCircle2 className="mr-1 h-3 w-3" /> Accept
                         </Button>
@@ -686,27 +780,94 @@ function KanbanBoard({ tasks, currentUserId, isLeader, onUpdate }: {
   );
 }
 
-function SubmissionsPanel({ tasks, submissions, isLeader, currentUserId, onApprove, onReject, onSubmitted }: {
-  tasks: any[]; submissions: any[]; isLeader: boolean;
-  currentUserId: string; onApprove: (id: string, taskId: string) => void;
-  onReject: (id: string) => void; onSubmitted: () => void;
+function SubmissionsPanel({
+  projectId,
+  tasks,
+  submissions,
+  isLeader,
+  currentUserId,
+  leaderUserId,
+  projectTitle,
+  memberName,
+  onApprove,
+  onReject,
+  onSubmitted,
+}: {
+  projectId: string;
+  tasks: any[];
+  submissions: any[];
+  isLeader: boolean;
+  currentUserId: string;
+  leaderUserId?: string;
+  projectTitle: string;
+  memberName: string;
+  onApprove: (id: string, taskId: string, submitterUserId?: string) => void;
+  onReject: (id: string, submitterUserId?: string) => void;
+  onSubmitted: () => void;
 }) {
-  const [fileName, setFileName] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [selectedTask, setSelectedTask] = useState<string>("");
   const [uploading, setUploading] = useState(false);
+  const [openingFile, setOpeningFile] = useState<string | null>(null);
+
+  const handleOpenFile = async (fileUrlOrPath: string, download = false) => {
+    setOpeningFile(fileUrlOrPath);
+    const { url, error } = await getSubmissionDownloadUrl(fileUrlOrPath);
+    setOpeningFile(null);
+
+    if (error || !url) {
+      if (!isStoragePath(fileUrlOrPath)) {
+        toast.error(error ?? "Could not open file.");
+      } else {
+        toast.error(
+          "This file was submitted before upload was enabled — ask the member to submit again.",
+        );
+      }
+      return;
+    }
+
+    if (download) {
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = displayFileName(fileUrlOrPath);
+      link.rel = "noopener";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } else {
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+  };
 
   const handleSubmit = async () => {
-    if (!fileName || !selectedTask) {
+    if (!selectedFile || !selectedTask) {
       toast.error("Pick a file and select a task first.");
       return;
     }
     setUploading(true);
 
+    const { path, error: uploadError } = await uploadSubmissionFile(
+      projectId,
+      selectedTask,
+      currentUserId,
+      selectedFile,
+    );
+
+    if (uploadError || !path) {
+      toast.error(
+        uploadError?.includes("Bucket not found")
+          ? "File storage is not set up. Run supabase/submissions-storage.sql in Supabase."
+          : `Upload failed: ${uploadError}`,
+      );
+      setUploading(false);
+      return;
+    }
+
     const { error } = await supabase.from("submissions").insert({
       task_id: selectedTask,
       submitted_by: currentUserId,
-      file_url: fileName,
-      description: fileName,
+      file_url: path,
+      description: selectedFile.name,
       status: "pending",
     });
 
@@ -714,8 +875,16 @@ function SubmissionsPanel({ tasks, submissions, isLeader, currentUserId, onAppro
       toast.error("Failed to submit: " + error.message);
     } else {
       await supabase.from("tasks").update({ status: "submitted", progress: 80 }).eq("id", selectedTask);
+      const taskTitle = tasks.find((t) => t.id === selectedTask)?.title || "a task";
+      if (leaderUserId && leaderUserId !== currentUserId) {
+        await notifyUser({
+          userId: leaderUserId,
+          type: "submission_received",
+          message: `${memberName} submitted work for "${taskTitle}" in "${projectTitle}".`,
+        });
+      }
       toast.success("Submission sent for review!");
-      setFileName(null);
+      setSelectedFile(null);
       setSelectedTask("");
       onSubmitted();
     }
@@ -739,22 +908,49 @@ function SubmissionsPanel({ tasks, submissions, isLeader, currentUserId, onAppro
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium">{s.tasks?.title || "Task"}</div>
                   <div className="text-xs text-muted-foreground">
-                    {s.file_url} · by {s.profiles?.full_name || "Member"} · {new Date(s.submitted_at).toLocaleDateString()}
+                    {displayFileName(s.file_url)} · by {s.profiles?.full_name || "Member"} ·{" "}
+                    {new Date(s.submitted_at).toLocaleDateString()}
                   </div>
                 </div>
-                {s.status === "pending" && isLeader ? (
-                  <div className="flex gap-2">
-                    <Button size="sm" variant="outline" onClick={() => onReject(s.id)}>
-                      <MessageSquare className="mr-1 h-3 w-3" /> Needs changes
-                    </Button>
-                    <Button size="sm" className="bg-success text-success-foreground hover:bg-success/90"
-                      onClick={() => onApprove(s.id, s.task_id)}>
-                      <CheckCircle2 className="mr-1 h-3 w-3" /> Accept
-                    </Button>
-                  </div>
-                ) : (
-                  <Badge variant={s.status === "accepted" ? "default" : "secondary"}>{s.status}</Badge>
-                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={openingFile === s.file_url}
+                    onClick={() => handleOpenFile(s.file_url, false)}
+                  >
+                    <ExternalLink className="mr-1 h-3 w-3" />
+                    {openingFile === s.file_url ? "Opening..." : "View"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={openingFile === s.file_url}
+                    onClick={() => handleOpenFile(s.file_url, true)}
+                  >
+                    <Download className="mr-1 h-3 w-3" /> Download
+                  </Button>
+                  {s.status === "pending" && isLeader ? (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => onReject(s.id, getSubmissionSubmitterId(s))}
+                      >
+                        <MessageSquare className="mr-1 h-3 w-3" /> Needs changes
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="bg-success text-success-foreground hover:bg-success/90"
+                        onClick={() => onApprove(s.id, s.task_id, getSubmissionSubmitterId(s))}
+                      >
+                        <CheckCircle2 className="mr-1 h-3 w-3" /> Accept
+                      </Button>
+                    </>
+                  ) : (
+                    <Badge variant={s.status === "accepted" ? "default" : "secondary"}>{s.status}</Badge>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -778,12 +974,13 @@ function SubmissionsPanel({ tasks, submissions, isLeader, currentUserId, onAppro
         </div>
         <label className="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-border p-6 text-center transition-colors hover:border-primary/50">
           <Upload className="h-7 w-7 text-muted-foreground" />
-          <span className="mt-2 text-sm font-medium">{fileName ?? "Upload file"}</span>
+          <span className="mt-2 text-sm font-medium">{selectedFile?.name ?? "Upload file"}</span>
           <span className="mt-1 text-xs text-muted-foreground">PDF, DOCX, ZIP, Images</span>
           <input
             type="file"
             className="hidden"
-            onChange={(e) => setFileName(e.target.files?.[0]?.name ?? null)}
+            accept=".pdf,.doc,.docx,.zip,.png,.jpg,.jpeg,.webp"
+            onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
           />
         </label>
         <Button className="mt-4 w-full bg-gradient-primary" onClick={handleSubmit} disabled={uploading}>
