@@ -1,10 +1,10 @@
 import { Link, useLocation, useRouter } from "@tanstack/react-router";
 import { LayoutDashboard, FolderKanban, GraduationCap, Bell, LogOut, Sparkles, Menu, X } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "./theme-toggle";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { currentUser, mockNotifications } from "@/lib/mock-data";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { supabase } from "@/lib/supabase";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -35,7 +35,53 @@ export function AppShell({ children, role = "student" }: { children: ReactNode; 
   const location = useLocation();
   const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [profile, setProfile] = useState<any>(null);
+  const [notifications, setNotifications] = useState<any[]>([]);
   const nav = role === "professor" ? professorNav : studentNav;
+
+  useEffect(() => {
+    loadUserData();
+  }, []);
+
+  const loadUserData = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    // Get real profile
+    const { data: profileData } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", user.id)
+      .single();
+    setProfile(profileData);
+
+    // Get real notifications
+    const { data: notifData } = await supabase
+      .from("notifications")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("read", false)
+      .order("created_at", { ascending: false })
+      .limit(5);
+    setNotifications(notifData || []);
+  };
+
+  const handleMarkRead = async (notifId: string) => {
+    await supabase
+      .from("notifications")
+      .update({ read: true })
+      .eq("id", notifId);
+    setNotifications((prev) => prev.filter((n) => n.id !== notifId));
+  };
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    router.navigate({ to: "/" });
+  };
+
+  const userName = profile?.full_name || "User";
+  const userEmail = profile?.email || "";
+  const userInitial = userName[0]?.toUpperCase() || "U";
 
   return (
     <div className="min-h-screen bg-background">
@@ -99,49 +145,69 @@ export function AppShell({ children, role = "student" }: { children: ReactNode; 
           </Button>
 
           <div className="flex flex-1 items-center justify-end gap-2">
+            {/* Notifications */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon" className="relative">
                   <Bell className="h-4 w-4" />
-                  <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-primary" />
+                  {notifications.length > 0 && (
+                    <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-primary" />
+                  )}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-80">
-                <DropdownMenuLabel>Notifications</DropdownMenuLabel>
+                <DropdownMenuLabel className="flex items-center justify-between">
+                  Notifications
+                  {notifications.length > 0 && (
+                    <Badge variant="secondary">{notifications.length} new</Badge>
+                  )}
+                </DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                {mockNotifications.map((n) => (
-                  <DropdownMenuItem key={n.id} className="flex flex-col items-start gap-1 py-3">
-                    <div className="flex w-full items-center justify-between">
-                      <span className="text-sm font-medium">{n.title}</span>
-                      <Badge variant="secondary" className="text-[10px]">{n.time}</Badge>
-                    </div>
-                    <span className="text-xs text-muted-foreground">{n.message}</span>
-                  </DropdownMenuItem>
-                ))}
+                {notifications.length === 0 ? (
+                  <div className="px-3 py-4 text-center text-sm text-muted-foreground">
+                    No new notifications
+                  </div>
+                ) : (
+                  notifications.map((n) => (
+                    <DropdownMenuItem
+                      key={n.id}
+                      onClick={() => handleMarkRead(n.id)}
+                      className="flex flex-col items-start gap-1 py-3"
+                    >
+                      <div className="flex w-full items-center justify-between">
+                        <span className="text-sm font-medium">{n.type}</span>
+                        <Badge variant="secondary" className="text-[10px]">
+                          {new Date(n.created_at).toLocaleDateString()}
+                        </Badge>
+                      </div>
+                      <span className="text-xs text-muted-foreground">{n.message}</span>
+                    </DropdownMenuItem>
+                  ))
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
 
             <ThemeToggle />
 
+            {/* Profile */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" className="gap-2 px-2">
                   <Avatar className="h-7 w-7">
-                    <AvatarImage src={currentUser.avatar} alt={currentUser.name} />
-                    <AvatarFallback>{currentUser.name[0]}</AvatarFallback>
+                    <AvatarFallback>{userInitial}</AvatarFallback>
                   </Avatar>
-                  <span className="hidden text-sm font-medium md:inline">{currentUser.name}</span>
+                  <span className="hidden text-sm font-medium md:inline">{userName}</span>
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuLabel>
                   <div>
-                    <div className="font-medium">{currentUser.name}</div>
-                    <div className="text-xs text-muted-foreground">{currentUser.email}</div>
+                    <div className="font-medium">{userName}</div>
+                    <div className="text-xs text-muted-foreground">{userEmail}</div>
                   </div>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => router.navigate({ to: "/" })}>
+                <DropdownMenuItem onClick={handleSignOut}>
                   <LogOut className="mr-2 h-4 w-4" /> Sign out
                 </DropdownMenuItem>
               </DropdownMenuContent>

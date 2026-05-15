@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { GraduationCap, ArrowLeft, Sparkles, Brain, Users } from "lucide-react";
 import { toast } from "sonner";
+import { supabase } from "@/lib/supabase";
 
 export const Route = createFileRoute("/login")({
   head: () => ({ meta: [{ title: "Log in — ScholarSync" }, { name: "description", content: "Log in to your ScholarSync account." }] }),
@@ -14,14 +15,60 @@ export const Route = createFileRoute("/login")({
 function LoginPage() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    setTimeout(() => {
-      toast.success("Welcome back, Aisha!");
-      navigate({ to: "/dashboard" });
-    }, 600);
+
+    try {
+      // Step 1: Sign in with Supabase
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (error) {
+        toast.error(error.message);
+        setLoading(false);
+        return;
+      }
+
+      const userId = data.user?.id;
+
+      if (!userId) {
+        toast.error("Login failed. Please try again.");
+        setLoading(false);
+        return;
+      }
+
+      // Step 2: Get the user's profile to check their role
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("full_name, role")
+        .eq("id", userId)
+        .single();
+
+      if (profileError || !profile) {
+        toast.error("Could not load your profile. Please try again.");
+        setLoading(false);
+        return;
+      }
+
+      // Step 3: Redirect based on role
+      toast.success(`Welcome back, ${profile.full_name}!`);
+      if (profile.role === "professor") {
+        navigate({ to: "/professor" });
+      } else {
+        navigate({ to: "/dashboard" });
+      }
+
+    } catch (err) {
+      toast.error("Something went wrong. Please try again.");
+    }
+
+    setLoading(false);
   };
 
   return (
@@ -75,14 +122,28 @@ function LoginPage() {
           <form onSubmit={handleSubmit} className="mt-8 space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
-              <Input id="email" type="email" placeholder="aisha@uni.edu" required defaultValue="aisha@uni.edu" />
+              <Input
+                id="email"
+                type="email"
+                placeholder="you@uni.edu"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
             </div>
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label htmlFor="password">Password</Label>
                 <a href="#" className="text-xs text-primary hover:underline">Forgot?</a>
               </div>
-              <Input id="password" type="password" placeholder="••••••••" required defaultValue="demopassword" />
+              <Input
+                id="password"
+                type="password"
+                placeholder="••••••••"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
             </div>
 
             <Button type="submit" disabled={loading} className="w-full bg-gradient-primary shadow-elegant">
@@ -94,10 +155,6 @@ function LoginPage() {
             Don't have an account?{" "}
             <Link to="/signup" className="font-medium text-primary hover:underline">Sign up</Link>
           </p>
-
-          <div className="mt-6 rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
-            <strong>Demo:</strong> Use any credentials — login is mocked. Or try role <Link to="/professor" className="text-primary hover:underline">/professor</Link>.
-          </div>
         </div>
       </div>
     </div>

@@ -159,11 +159,20 @@ export const mockProjects: Project[] = [
   },
 ];
 
-export const mockNotifications = [
-  { id: "n1", title: "New join request", message: "Sofia Müller wants to join Campus Navigation App", time: "1h ago", type: "info" as const },
-  { id: "n2", title: "Submission received", message: "Priya submitted Literature Review for approval", time: "2h ago", type: "success" as const },
-  { id: "n3", title: "Deadline approaching", message: "MVP Build milestone due in 3 days", time: "5h ago", type: "warning" as const },
-  { id: "n4", title: "Task approved", message: "Your design mockup was approved by leader", time: "Yesterday", type: "success" as const },
+export interface Notification {
+  id: string;
+  title: string;
+  message: string;
+  time: string;
+  type: "info" | "success" | "warning";
+  href: string;
+}
+
+export const mockNotifications: Notification[] = [
+  { id: "n1", title: "New join request", message: "Sofia Müller wants to join Campus Navigation App", time: "1h ago", type: "info", href: "/projects/PRJ-2284" },
+  { id: "n2", title: "Submission received", message: "Priya submitted Literature Review for approval", time: "2h ago", type: "success", href: "/projects/PRJ-2284" },
+  { id: "n3", title: "Deadline approaching", message: "MVP Build milestone due in 3 days", time: "5h ago", type: "warning", href: "/projects/PRJ-2284" },
+  { id: "n4", title: "Task approved", message: "Your design mockup was approved by leader", time: "Yesterday", type: "success", href: "/projects/PRJ-2284" },
 ];
 
 export const mockUpcomingDeadlines = [

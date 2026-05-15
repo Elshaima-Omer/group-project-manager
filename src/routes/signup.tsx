@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { GraduationCap, ArrowLeft, BookOpen, Users } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { supabase } from "@/lib/supabase";
 
 export const Route = createFileRoute("/signup")({
   head: () => ({ meta: [{ title: "Sign up — ScholarSync" }, { name: "description", content: "Create your free ScholarSync account as a student or professor." }] }),
@@ -16,14 +17,61 @@ function SignupPage() {
   const navigate = useNavigate();
   const [role, setRole] = useState<"Student" | "Professor">("Student");
   const [loading, setLoading] = useState(false);
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    setTimeout(() => {
-      toast.success(`Account created — welcome!`);
+
+    try {
+      // Step 1: Create auth account in Supabase
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+      });
+
+      console.log("Supabase response:", data, error);
+
+      if (error) {
+        toast.error(error.message);
+        setLoading(false);
+        return;
+      }
+
+      const userId = data.user?.id;
+
+      if (!userId) {
+        toast.error("Signup failed. Please try again.");
+        setLoading(false);
+        return;
+      }
+
+      // Step 2: Save extra info to profiles table
+      const { error: profileError } = await supabase
+        .from("profiles")
+        .insert({
+          id: userId,
+          full_name: name,
+          email: email,
+          role: role.toLowerCase(),
+        });
+
+      if (profileError) {
+        toast.error("Account created but profile save failed: " + profileError.message);
+        setLoading(false);
+        return;
+      }
+
+      toast.success(`Account created — welcome, ${name}!`);
       navigate({ to: role === "Professor" ? "/professor" : "/dashboard" });
-    }, 600);
+
+    } catch (err) {
+      toast.error("Something went wrong. Please try again.");
+    }
+
+    setLoading(false);
   };
 
   return (
@@ -93,19 +141,39 @@ function SignupPage() {
 
             <div className="space-y-2">
               <Label htmlFor="name">Full name</Label>
-              <Input id="name" placeholder="Aisha Khan" required />
+              <Input
+                id="name"
+                placeholder="Aisha Khan"
+                required
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
-              <Input id="email" type="email" placeholder="you@uni.edu" required />
+              <Input
+                id="email"
+                type="email"
+                placeholder="you@uni.edu"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="password">Password</Label>
-              <Input id="password" type="password" placeholder="At least 8 characters" required />
+              <Input
+                id="password"
+                type="password"
+                placeholder="At least 8 characters"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
             </div>
 
             <Button type="submit" disabled={loading} className="w-full bg-gradient-primary shadow-elegant">
-              {loading ? "Creating..." : `Create ${role.toLowerCase()} account`}
+              {loading ? "Creating account..." : `Create ${role.toLowerCase()} account`}
             </Button>
           </form>
 

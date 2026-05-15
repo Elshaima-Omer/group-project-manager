@@ -1,36 +1,197 @@
-import { createFileRoute, Link, notFound } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { StatusBadge } from "@/components/status-badge";
-import { mockProfessorProjects } from "@/lib/mock-data";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { supabase } from "@/lib/supabase";
+import { generateReport } from "@/lib/gemini";
 import { ArrowLeft, Download, Sparkles, Crown, Calendar, CheckCircle2, MessageSquare, TrendingUp } from "lucide-react";
 import { toast } from "sonner";
+import { useEffect, useState } from "react";
 
 export const Route = createFileRoute("/professor/$projectId")({
-  head: ({ params }) => ({ meta: [{ title: `Report ${params.projectId} — ScholarSync` }] }),
-  loader: ({ params }) => {
-    const project = mockProfessorProjects.find((p) => p.id === params.projectId);
-    if (!project) throw notFound();
-    return { project };
-  },
+  head: () => ({ meta: [{ title: "Project Report — ScholarSync" }] }),
   component: FinalReport,
-  notFoundComponent: () => (
-    <AppShell role="professor">
-      <Card className="p-12 text-center">
-        <h2 className="text-xl font-semibold">Report not found</h2>
-        <Link to="/professor" className="mt-4 inline-block text-primary hover:underline">Back to dashboard</Link>
-      </Card>
-    </AppShell>
-  ),
 });
 
 function FinalReport() {
-  const { project: p } = Route.useLoaderData() as { project: (typeof mockProfessorProjects)[number] };
-  const completedTasks = p.tasks.filter((t) => t.status === "Approved").length;
+  const { projectId } = Route.useParams();
+  const [project, setProject] = useState<any>(null);
+  const [members, setMembers] = useState<any[]>([]);
+  const [tasks, setTasks] = useState<any[]>([]);
+  const [aiReport, setAiReport] = useState<string>("");
+  const [aiGrades, setAiGrades] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [generating, setGenerating] = useState(false);
+
+  useEffect(() => {
+    loadReport();
+  }, [projectId]);
+
+  const loadReport = async () => {
+    setLoading(true);
+
+    const { data: projectData } = await supabase
+      .from("projects")
+      .select("*")
+      .eq("id", projectId)
+      .single();
+    setProject(projectData);
+
+    const { data: membersData } = await supabase
+      .from("project_members")
+      .select("*, profiles(*)")
+      .eq("project_id", projectId)
+      .eq("status", "accepted");
+    setMembers(membersData || []);
+
+    const { data: tasksData } = await supabase
+      .from("tasks")
+      .select("*, profiles(full_name)")
+      .eq("project_id", projectId);
+    setTasks(tasksData || []);
+
+    // Check if a report already exists
+    try {
+      const { data: existingReport } = await supabase
+        .from("ai_reports")
+        .select("*")
+        .eq("project_id", projectId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .single();
+
+      if (existingReport) {
+        try {
+          const parsed = JSON.parse(existingReport.report_content);
+          setAiReport(parsed.summary || existingReport.report_content);
+          setAiGrades(parsed.grades || null);
+        } catch {
+          setAiReport(existingReport.report_content);
+        }
+      }
+    } catch {
+      // No existing report
+    }
+
+    setLoading(false);
+  };
+
+  const generateAiReport = async () => {
+    if (!project || members.length === 0) {
+      toast.error("No project data to generate a report from.");
+      return;
+    }
+    setGenerating(true);
+
+    const memberData = members.map((m) => {
+      const memberTasks = tasks.filter((t) => t.assigned_to === m.user_id);
+      const completed = memberTasks.filter((t) => t.status === "approved").length;
+      const progress = memberTasks.length > 0
+        ? Math.round(memberTasks.reduce((s: number, t: any) => s + (t.progress || 0), 0) / memberTasks.length)
+        : 0;
+      return {
+        name: m.profiles?.full_name || "Unknown",
+        role: m.role,
+        totalTasks: memberTasks.length,
+        completedTasks: completed,
+        progress,
+        skills: m.skills || [],
+      };
+    });
+
+    const overallProgress = tasks.length > 0
+      ? Math.round(tasks.reduce((s: number, t: any) => s + (t.progress || 0), 0) / tasks.length)
+      : 0;
+
+    const result = await generateReport(
+      project.title,
+      project.type || [],
+      overallProgress,
+      tasks.length,
+      tasks.filter((t) => t.status === "approved").length,
+      project.deadline || "No deadline",
+      memberData
+    );
+
+    setAiReport(result.summary);
+    setAiGrades(result.grades);
+
+    // Save report to database
+    const { data: { user } } = await supabase.auth.getUser();
+    await supabase.from("ai_reports").insert({
+      project_id: projectId,
+      generated_by: user?.id,
+      report_content: JSON.stringify(result),
+    });
+
+    toast.success("AI report generated and saved!");
+    setGenerating(false);
+  };
+
+  const handleDownload = () => {
+    if (!aiReport) { toast.error("Generate a report first."); return; }
+
+    const content = `
+PROJECT REPORT — ${project?.title}
+Generated by ScholarSync AI
+=====================================
+
+${aiReport}
+
+MEMBER CONTRIBUTIONS:
+${members.map((m) => {
+  const memberTasks = tasks.filter((t) => t.assigned_to === m.user_id);
+  const progress = memberTasks.length > 0
+    ? Math.round(memberTasks.reduce((s: number, t: any) => s + (t.progress || 0), 0) / memberTasks.length)
+    : 0;
+  return `- ${m.profiles?.full_name} (${m.role}): ${progress}% progress, ${memberTasks.filter((t: any) => t.status === "approved").length}/${memberTasks.length} tasks completed`;
+}).join("\n")}
+
+TASKS:
+${tasks.map((t) => `- ${t.title} | ${t.profiles?.full_name || "Unassigned"} | ${t.status}`).join("\n")}
+
+GRADES:
+${aiGrades ? Object.entries(aiGrades).map(([k, v]) => `${k}: ${v}`).join("\n") : "Not yet evaluated"}
+    `.trim();
+
+    const blob = new Blob([content], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${project?.title}-report.txt`;
+    a.click();
+    toast.success("Report downloaded!");
+  };
+
+  if (loading) {
+    return (
+      <AppShell role="professor">
+        <div className="flex h-64 items-center justify-center">
+          <p className="text-muted-foreground">Loading report...</p>
+        </div>
+      </AppShell>
+    );
+  }
+
+  if (!project) {
+    return (
+      <AppShell role="professor">
+        <Card className="p-12 text-center">
+          <h2 className="text-xl font-semibold">Project not found</h2>
+          <Link to="/professor" className="mt-4 inline-block text-primary hover:underline">Back to dashboard</Link>
+        </Card>
+      </AppShell>
+    );
+  }
+
+  const overallProgress = tasks.length > 0
+    ? Math.round(tasks.reduce((s: number, t: any) => s + (t.progress || 0), 0) / tasks.length)
+    : 0;
+  const completedTasks = tasks.filter((t) => t.status === "approved").length;
+  const leader = members.find((m) => m.role === "leader");
 
   return (
     <AppShell role="professor">
@@ -38,77 +199,77 @@ function FinalReport() {
         <ArrowLeft className="h-4 w-4" /> Back to dashboard
       </Link>
 
-      {/* Report header */}
       <Card className="overflow-hidden">
         <div className="bg-gradient-primary p-8 text-primary-foreground">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <Badge variant="secondary" className="gap-1"><Sparkles className="h-3 w-3" /> AI Final Report</Badge>
-              <h1 className="mt-3 font-display text-3xl font-bold">{p.title}</h1>
-              <p className="mt-1 text-sm text-primary-foreground/80">{p.id} · {p.course}</p>
+              <Badge variant="secondary" className="gap-1">
+                <Sparkles className="h-3 w-3" /> AI Final Report
+              </Badge>
+              <h1 className="mt-3 font-display text-3xl font-bold">{project.title}</h1>
+              <p className="mt-1 text-sm text-primary-foreground/80">
+                {project.id?.slice(0, 8).toUpperCase()} · {(project.type || []).join(", ")}
+              </p>
             </div>
-            <Button variant="secondary" onClick={() => toast.success("Report PDF downloaded")}>
-              <Download className="mr-2 h-4 w-4" /> Download PDF
+            <Button variant="secondary" onClick={handleDownload}>
+              <Download className="mr-2 h-4 w-4" /> Download Report
             </Button>
           </div>
         </div>
 
         <div className="grid gap-4 p-6 md:grid-cols-4">
-          <Stat label="Final Progress" value={`${p.progress}%`} icon={TrendingUp} />
-          <Stat label="Tasks Completed" value={`${completedTasks}/${p.tasks.length}`} icon={CheckCircle2} />
-          <Stat label="Deadlines Met" value={`${p.deadlinesMet}/${p.deadlinesMet + p.deadlinesMissed}`} icon={Calendar} />
-          <Stat label="Status" value={p.status} icon={Sparkles} />
+          <Stat label="Final Progress" value={`${overallProgress}%`} icon={TrendingUp} />
+          <Stat label="Tasks Completed" value={`${completedTasks}/${tasks.length}`} icon={CheckCircle2} />
+          <Stat label="Team Size" value={`${members.length} members`} icon={Crown} />
+          <Stat label="Deadline" value={project.deadline || "Not set"} icon={Calendar} />
         </div>
       </Card>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-3">
         <Card className="p-6 lg:col-span-2">
-          <h2 className="font-display text-lg font-semibold">Project Summary</h2>
-          <p className="mt-2 text-sm text-muted-foreground">{p.description}</p>
-
-          <h3 className="mt-6 font-display font-semibold">Member Contributions</h3>
+          <h2 className="font-display text-lg font-semibold">Member Contributions</h2>
           <div className="mt-3 space-y-3">
-            {p.members.map((m) => (
-              <div key={m.id} className="flex items-center gap-3 rounded-lg border border-border/60 p-3">
-                <Avatar className="h-9 w-9">
-                  <AvatarImage src={m.avatar} />
-                  <AvatarFallback>{m.name[0]}</AvatarFallback>
-                </Avatar>
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 text-sm font-semibold">
-                    {m.name}
-                    {m.role === "Leader" && <Crown className="h-3 w-3 text-warning-foreground" />}
+            {members.map((m) => {
+              const memberTasks = tasks.filter((t) => t.assigned_to === m.user_id);
+              const progress = memberTasks.length > 0
+                ? Math.round(memberTasks.reduce((s: number, t: any) => s + (t.progress || 0), 0) / memberTasks.length)
+                : 0;
+              return (
+                <div key={m.id} className="flex items-center gap-3 rounded-lg border border-border/60 p-3">
+                  <Avatar className="h-9 w-9">
+                    <AvatarFallback>{m.profiles?.full_name?.[0] || "?"}</AvatarFallback>
+                  </Avatar>
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 text-sm font-semibold">
+                      {m.profiles?.full_name || "Unknown"}
+                      {m.role === "leader" && <Crown className="h-3 w-3 text-warning-foreground" />}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {memberTasks.filter((t: any) => t.status === "approved").length}/{memberTasks.length} tasks completed
+                    </div>
+                    <Progress value={progress} className="mt-1 h-1.5" />
                   </div>
-                  <Progress value={m.contribution * 3} className="mt-1 h-1.5" />
+                  <span className="text-sm font-bold">{progress}%</span>
                 </div>
-                <span className="text-sm font-bold">{m.contribution}%</span>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
-          <h3 className="mt-6 font-display font-semibold">Tasks Completed</h3>
+          <h2 className="mt-6 font-display text-lg font-semibold">Tasks Overview</h2>
           <div className="mt-3 space-y-2">
-            {p.tasks.map((t) => (
-              <div key={t.id} className="flex items-center justify-between rounded-lg border border-border/60 p-3 text-sm">
-                <span>{t.title}</span>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground">{t.assigneeName}</span>
-                  <StatusBadge status={t.status} />
+            {tasks.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No tasks found for this project.</p>
+            ) : (
+              tasks.map((t) => (
+                <div key={t.id} className="flex items-center justify-between rounded-lg border border-border/60 p-3 text-sm">
+                  <span>{t.title}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">{t.profiles?.full_name || "Unassigned"}</span>
+                    <Badge variant={t.status === "approved" ? "default" : "secondary"}>{t.status}</Badge>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
-
-          <h3 className="mt-6 font-display font-semibold">Timeline Performance</h3>
-          <div className="mt-3 space-y-2">
-            {p.milestones.map((m) => (
-              <div key={m.title} className="flex items-center justify-between rounded-lg border border-border/60 p-3 text-sm">
-                <span>{m.title}</span>
-                <Badge variant={m.done ? "default" : "secondary"}>
-                  {m.done ? "Completed" : "Pending"} · {m.date}
-                </Badge>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </Card>
 
@@ -116,34 +277,51 @@ function FinalReport() {
           <Card className="border-primary/30 bg-gradient-hero p-6">
             <Sparkles className="h-5 w-5 text-primary" />
             <h3 className="mt-2 font-display font-semibold">AI Evaluation Summary</h3>
-            <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
-              The team demonstrated strong execution with balanced contributions across members. Leadership coordination
-              was effective, with clear task delegation and proactive deadline management. AI recommends recognizing
-              the leader's facilitation skills and the team's collaborative approach.
-            </p>
-            <div className="mt-4 grid grid-cols-2 gap-2">
-              {[
-                { l: "Collaboration", v: "A" },
-                { l: "Timeliness", v: p.deadlinesMissed > 0 ? "B" : "A" },
-                { l: "Quality", v: "A-" },
-                { l: "Innovation", v: "A" },
-              ].map((g) => (
-                <div key={g.l} className="rounded-lg border border-border/60 bg-background/50 p-3 text-center">
-                  <div className="font-display text-xl font-bold text-gradient">{g.v}</div>
-                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{g.l}</div>
-                </div>
-              ))}
-            </div>
+
+            {aiReport ? (
+              <>
+                <p className="mt-2 text-sm text-muted-foreground leading-relaxed">{aiReport}</p>
+                {aiGrades && (
+                  <div className="mt-4 grid grid-cols-2 gap-2">
+                    {Object.entries(aiGrades).map(([key, value]) => (
+                      <div key={key} className="rounded-lg border border-border/60 bg-background/50 p-3 text-center">
+                        <div className="font-display text-xl font-bold text-gradient">{value as string}</div>
+                        <div className="text-[10px] uppercase tracking-wide text-muted-foreground capitalize">{key}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <Button variant="outline" size="sm" className="mt-4 w-full" onClick={generateAiReport} disabled={generating}>
+                  <Sparkles className="mr-2 h-3 w-3" />
+                  {generating ? "Regenerating..." : "Regenerate Report"}
+                </Button>
+              </>
+            ) : (
+              <>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Click below to generate an AI evaluation based on real task completion and member contributions.
+                </p>
+                <Button className="mt-4 w-full bg-gradient-primary" onClick={generateAiReport} disabled={generating}>
+                  <Sparkles className="mr-2 h-4 w-4" />
+                  {generating ? "Generating..." : "Generate AI Report"}
+                </Button>
+              </>
+            )}
           </Card>
 
           <Card className="p-6">
             <h3 className="flex items-center gap-2 font-display font-semibold">
-              <MessageSquare className="h-4 w-4 text-primary" /> Leader Comments
+              <MessageSquare className="h-4 w-4 text-primary" /> Project Leader
             </h3>
-            <p className="mt-2 text-sm italic text-muted-foreground">
-              "The team handled the unexpected scope changes really well. Marco's backend work was outstanding,
-              and Priya kept our research grounded. Proud of what we shipped." — {p.leader}
-            </p>
+            <div className="mt-3 flex items-center gap-3">
+              <Avatar className="h-9 w-9">
+                <AvatarFallback>{leader?.profiles?.full_name?.[0] || "?"}</AvatarFallback>
+              </Avatar>
+              <div>
+                <div className="text-sm font-semibold">{leader?.profiles?.full_name || "Unknown"}</div>
+                <div className="text-xs text-muted-foreground">{leader?.profiles?.email}</div>
+              </div>
+            </div>
           </Card>
         </div>
       </div>

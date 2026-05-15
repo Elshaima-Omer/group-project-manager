@@ -8,42 +8,122 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Upload, Sparkles, CheckCircle2, FileText, Clock, Users, Brain } from "lucide-react";
-import { skillsByType, type ProjectType } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
+import { analyzeProject } from "@/lib/gemini";
 import { toast } from "sonner";
+import { supabase } from "@/lib/supabase";
 
 export const Route = createFileRoute("/projects/create")({
   head: () => ({ meta: [{ title: "New Project — ScholarSync" }] }),
   component: CreateProject,
 });
 
-const ALL_TYPES: ProjectType[] = ["Coding", "Report Writing", "Presentation", "Research", "Design", "Data Analysis"];
+const ALL_TYPES = ["Coding", "Report Writing", "Presentation", "Research", "Design", "Data Analysis"];
+
+const skillsByType: Record<string, string[]> = {
+  Coding: ["Frontend", "Backend", "Database", "Testing"],
+  "Report Writing": ["Research", "Proofreading", "Editing", "Referencing"],
+  Presentation: ["Design", "Storytelling", "Public Speaking", "Slide Creation"],
+  Research: ["Data Gathering", "Analysis", "Writing", "Critical Thinking"],
+  Design: ["UI/UX", "Graphic Design", "Prototyping", "Branding"],
+  "Data Analysis": ["Statistics", "Data Visualization", "Excel", "Python"],
+};
 
 function CreateProject() {
   const navigate = useNavigate();
-  const [types, setTypes] = useState<ProjectType[]>([]);
+  const [types, setTypes] = useState<string[]>([]);
   const [skills, setSkills] = useState<string[]>([]);
   const [analyzed, setAnalyzed] = useState(false);
+  const [aiResult, setAiResult] = useState<any>(null);
   const [fileName, setFileName] = useState<string | null>(null);
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [deadline, setDeadline] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
 
-  const availableSkills = Array.from(new Set(types.flatMap((t) => skillsByType[t])));
+  const availableSkills = Array.from(new Set(types.flatMap((t) => skillsByType[t] || [])));
 
-  const toggleType = (t: ProjectType) =>
+  const toggleType = (t: string) =>
     setTypes((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
 
   const toggleSkill = (s: string) =>
     setSkills((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]));
 
-  const handleAnalyze = () => {
+  const handleAnalyze = async () => {
     if (!fileName) { toast.error("Upload a project description first."); return; }
+    if (types.length === 0) { toast.error("Select at least one project type first."); return; }
+    setAnalyzing(true);
+
+    const result = await analyzeProject(title, types, description);
+    setAiResult(result);
     setAnalyzed(true);
     toast.success("AI analysis complete!");
+    setAnalyzing(false);
   };
 
-  const handleCreate = (e: React.FormEvent) => {
+  const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!title || !deadline || !password) {
+      toast.error("Please fill in all required fields.");
+      return;
+    }
+    setLoading(true);
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { toast.error("You must be logged in."); setLoading(false); return; }
+
+    const { data: project, error: projectError } = await supabase
+      .from("projects")
+      .insert({
+        title,
+        type: types,
+        description,
+        password,
+        deadline,
+        leader_id: user.id,
+      })
+      .select()
+      .single();
+
+    if (projectError || !project) {
+      toast.error("Failed to create project: " + projectError?.message);
+      setLoading(false);
+      return;
+    }
+
+    const { error: memberError } = await supabase
+      .from("project_members")
+      .insert({
+        project_id: project.id,
+        user_id: user.id,
+        role: "leader",
+        status: "accepted",
+        skills: skills,
+      });
+
+    if (memberError) {
+      toast.error("Project created but failed to add you as leader.");
+      setLoading(false);
+      return;
+    }
+
+    if (aiResult?.tasks) {
+      const taskInserts = aiResult.tasks.map((taskTitle: string) => ({
+        project_id: project.id,
+        assigned_to: user.id,
+        title: taskTitle,
+        status: "pending",
+        priority: "medium",
+        deadline,
+      }));
+      await supabase.from("tasks").insert(taskInserts);
+    }
+
     toast.success("Project created — you're now the leader!");
     navigate({ to: "/projects" });
+    setLoading(false);
   };
 
   return (
@@ -64,20 +144,45 @@ function CreateProject() {
             <div className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="title">Project title</Label>
-                <Input id="title" placeholder="e.g. AI-Powered Study Companion" required />
+                <Input
+                  id="title"
+                  placeholder="e.g. AI-Powered Study Companion"
+                  required
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="desc">Brief description</Label>
-                <Textarea id="desc" rows={3} placeholder="What's this project about?" />
+                <Textarea
+                  id="desc"
+                  rows={3}
+                  placeholder="What's this project about?"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                />
               </div>
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="deadline">Deadline</Label>
-                  <Input id="deadline" type="date" required />
+                  <Input
+                    id="deadline"
+                    type="date"
+                    required
+                    value={deadline}
+                    onChange={(e) => setDeadline(e.target.value)}
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="pwd">Project password</Label>
-                  <Input id="pwd" type="text" placeholder="Members use to join" required />
+                  <Input
+                    id="pwd"
+                    type="text"
+                    placeholder="Members use this to join"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
                 </div>
               </div>
             </div>
@@ -104,7 +209,7 @@ function CreateProject() {
 
             {availableSkills.length > 0 && (
               <div className="mt-6">
-                <Label className="mb-3 block">Recommended skills</Label>
+                <Label className="mb-3 block">Your skills for this project</Label>
                 <div className="flex flex-wrap gap-2">
                   {availableSkills.map((s) => (
                     <button
@@ -137,13 +242,13 @@ function CreateProject() {
                 onChange={(e) => setFileName(e.target.files?.[0]?.name ?? null)}
               />
             </label>
-            <Button type="button" onClick={handleAnalyze} variant="outline" className="mt-4 w-full">
-              <Sparkles className="mr-2 h-4 w-4 text-primary" /> Run AI analysis
+            <Button type="button" onClick={handleAnalyze} variant="outline" className="mt-4 w-full" disabled={analyzing}>
+              <Sparkles className="mr-2 h-4 w-4 text-primary" />
+              {analyzing ? "Analyzing..." : "Run AI analysis"}
             </Button>
           </Card>
         </div>
 
-        {/* AI panel */}
         <div className="space-y-4">
           <Card className={cn("p-6 transition-all", analyzed ? "border-primary/40 bg-gradient-hero" : "")}>
             <div className="flex items-center gap-2">
@@ -157,18 +262,18 @@ function CreateProject() {
             ) : (
               <div className="mt-4 space-y-4 text-sm">
                 <Section icon={CheckCircle2} title="Extracted Tasks">
-                  {["Research user needs", "Design UI mockups", "Build authentication", "Implement dashboard", "User testing", "Final report"].map((t) => (
+                  {aiResult?.tasks?.map((t: string) => (
                     <div key={t} className="flex items-center gap-2 rounded-md bg-card/50 p-2">
                       <CheckCircle2 className="h-3.5 w-3.5 text-success" /> {t}
                     </div>
                   ))}
                 </Section>
                 <Section icon={Users} title="Auto Assignments">
-                  <p className="text-xs text-muted-foreground">Tasks will be matched to members based on selected skills once team is built.</p>
+                  <p className="text-xs text-muted-foreground">Tasks will be matched to members based on their skills once the team is built.</p>
                 </Section>
                 <Section icon={Clock} title="Suggested Timeline">
                   <div className="space-y-1.5">
-                    {["Week 1: Discovery", "Week 2-3: Design & Build", "Week 4: Testing", "Week 5: Submission"].map((m) => (
+                    {aiResult?.timeline?.map((m: string) => (
                       <div key={m} className="flex items-center gap-2 text-xs">
                         <div className="h-1.5 w-1.5 rounded-full bg-primary" /> {m}
                       </div>
@@ -177,7 +282,7 @@ function CreateProject() {
                 </Section>
                 <Section icon={Brain} title="Recommended Skills">
                   <div className="flex flex-wrap gap-1">
-                    {availableSkills.slice(0, 5).map((s) => (
+                    {aiResult?.skills?.map((s: string) => (
                       <Badge key={s} variant="secondary" className="text-[10px]">{s}</Badge>
                     ))}
                   </div>
@@ -186,8 +291,14 @@ function CreateProject() {
             )}
           </Card>
 
-          <Button type="submit" size="lg" className="w-full bg-gradient-primary shadow-elegant">
-            Create Project & Become Leader
+          <Card className="p-4 border-border/60">
+            <p className="text-xs text-muted-foreground">
+              After creating the project, share the <strong>Project ID</strong> and <strong>password</strong> with your teammates so they can join.
+            </p>
+          </Card>
+
+          <Button type="submit" size="lg" className="w-full bg-gradient-primary shadow-elegant" disabled={loading}>
+            {loading ? "Creating..." : "Create Project & Become Leader"}
           </Button>
         </div>
       </form>
